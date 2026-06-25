@@ -16,4 +16,4 @@ name: debug
 spec:
   kind: Debug
   queries:
-    all-participants:
+    race-to-goal:
