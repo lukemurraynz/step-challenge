@@ -107,10 +107,12 @@ jobs:
       - name: Deploy StepUp via Radius
         run: |
           rad deploy infra/app.bicep \
+            --group default \
+            --environment default \
             --parameters imageRegistry="$ACR.azurecr.io" \
             --parameters imageTag="$TAG"
           kubectl wait --for=condition=ready pod -l app=postgres -n default --timeout=180s
-
+          
       - name: Restart Dapr services so sidecars load components
         run: |
           for d in simulator clock notifier; do kubectl rollout restart "deploy/$d" -n default-stepup; done
