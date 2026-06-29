@@ -5,6 +5,7 @@ namespace StepChallenge.Simulator.Data;
 public sealed class PostgresStepLogRepository(NpgsqlDataSource dataSource) : IStepLogRepository
 {
     private const string GetParticipantsSql = "SELECT id FROM participants ORDER BY id;";
+    private static readonly string[] Names = ["Alex","Bo","Cam","Dee","Eli","Fin","Gus","Hana","Ivy","Jo","Kit","Lou","Max","Nia","Ola","Pat","Quin","Ravi","Sam","Tia"];
 
     private const string AddStepsSql = """
         INSERT INTO step_logs (participant_id, steps, log_date)
@@ -35,5 +36,28 @@ public sealed class PostgresStepLogRepository(NpgsqlDataSource dataSource) : ISt
     {
         await using var cmd = dataSource.CreateCommand(ResetSql);
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task StartContestAsync(int n, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using (var c = new NpgsqlCommand("TRUNCATE step_logs; DELETE FROM participants;", conn, tx))
+            await c.ExecuteNonQueryAsync(ct);
+        for (var i = 1; i <= n; i++)
+        {
+            await using var ins = new NpgsqlCommand(
+                "INSERT INTO participants (id,name,team,target) VALUES (@id,@nm,@tm,300000);", conn, tx);
+            ins.Parameters.AddWithValue("id", $"p{i:00}");
+            ins.Parameters.AddWithValue("nm", $"{Names[(i-1)%Names.Length]} {i}");
+            ins.Parameters.AddWithValue("tm", new[]{"Sharks","Eagles","Wolves"}[i%3]);
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+        await using (var s = new NpgsqlCommand("""
+            INSERT INTO challenge_state SELECT TRUE,date,day_number,daily_target,cumulative_target FROM daily_targets WHERE day_number=1
+            ON CONFLICT (id) DO UPDATE SET today=EXCLUDED.today,day_number=EXCLUDED.day_number,daily_target=EXCLUDED.daily_target,cumulative_target=EXCLUDED.cumulative_target;
+            UPDATE contest_state SET participant_count=@n,status='running',started_at=now() WHERE id;
+            """, conn, tx)) { s.Parameters.AddWithValue("n", n); await s.ExecuteNonQueryAsync(ct); }
+        await tx.CommitAsync(ct);
     }
 }

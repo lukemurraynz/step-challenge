@@ -35,4 +35,7 @@ public sealed class SimulatorService(IStepLogRepository repo, IOptions<Simulator
 
     public Task AddManualAsync(string participantId, int steps, CancellationToken ct = default)
         => repo.AddStepsAsync(participantId, steps, ct);
+
+    public Task StartContestAsync(int participants, CancellationToken ct = default)
+        => repo.StartContestAsync(Math.Clamp(participants, _opts.MinN, _opts.MaxN), ct);
 }
