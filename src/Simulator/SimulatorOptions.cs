@@ -6,4 +6,6 @@ public sealed class SimulatorOptions
     public int MinSteps { get; set; } = 200;
     public int MaxSteps { get; set; } = 2500;
     public int MaxParticipants { get; set; } = 3;
+    public int MinN { get; set; } = 2;
+    public int MaxN { get; set; } = 20;
 }

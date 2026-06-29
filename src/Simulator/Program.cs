@@ -39,4 +39,9 @@ app.MapPost("/manual", async (string participantId, int steps, SimulatorService 
     return Results.Ok(new { ok = true });
 });
 
+app.MapPost("/contest/start", async (int participants, SimulatorService sim, CancellationToken ct) =>
+{ 
+    await sim.StartContestAsync(participants, ct); return Results.Ok(new { started = participants }); 
+});
+
 app.Run();
