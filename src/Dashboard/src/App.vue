@@ -1,15 +1,22 @@
 <script setup>
 import { ResultSet } from '@drasi/signalr-vue';
-
+import { ref, computed } from 'vue';
 const hubUrl = 'http://localhost:8080/hub';
-
-// Collective goal = 6 participants × 300,000-step target.
-const COLLECTIVE_TARGET = 1_800_000;
+const participants = ref(8);
+const collectiveTarget = computed(() => participants.value * 300_000);
+async function startContest() {
+  await fetch(`/api/contest/start?participants=${participants.value}`, { method: 'POST' });
+}
 </script>
 
 <template>
   <main>
     <h1>🏆 StepUp Leaderboard</h1>
+
+    <form class="start" @submit.prevent="startContest">
+      <input type="number" v-model.number="participants" min="2" max="20" />
+      <button type="submit">Start contest</button>
+    </form>
 
     <!-- Group progress -->
     <ResultSet :url="hubUrl" queryId="collective-progress">
@@ -17,9 +24,9 @@ const COLLECTIVE_TARGET = 1_800_000;
         <section class="progress">
           <div class="progress__label">
             <span>Group progress</span>
-            <span>{{ (item.total ?? 0).toLocaleString() }} / {{ COLLECTIVE_TARGET.toLocaleString() }} steps</span>
+            <span>{{ (item.total ?? 0).toLocaleString() }} / {{ collectiveTarget.toLocaleString() }} steps</span>
           </div>
-          <progress :value="item.total ?? 0" :max="COLLECTIVE_TARGET"></progress>
+          <progress :value="item.total ?? 0" :max="collectiveTarget"></progress>
         </section>
       </template>
     </ResultSet>
