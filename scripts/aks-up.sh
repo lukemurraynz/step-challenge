@@ -108,13 +108,9 @@ for q in behind-pace collective-progress daily-smashed new-leader race-to-goal; 
   drasi apply -f "drasi/$q.yaml"
 done
 echo "Applying Drasi reactions..."
-for r in debug notifier-reaction; do
+for r in debug notifier-reaction dashboard-reaction; do
   drasi apply -f "drasi/$r.yaml"
 done
-# SignalR dashboard reaction is skipped due to upstream actor compatibility
-# issues with main-branch images — it will be re-enabled once Drasi ships
-# version-tagged images.
-# drasi apply -f drasi/dashboard-reaction.yaml
 
 cat <<DONE
 

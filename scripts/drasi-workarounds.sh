@@ -70,7 +70,7 @@ kubectl patch configmap drasi-config -n drasi-system \
 
 echo ""
 echo "=== Step 3: Fix Dapr pubsub components (rg-redis → actual Redis) ==="
-for comp in rg-pubsub-debug rg-pubsub-notifier; do
+for comp in rg-pubsub-debug rg-pubsub-notifier rg-pubsub-dashboard; do
   if kubectl get component "$comp" -n drasi-system &>/dev/null; then
     kubectl patch component "$comp" -n drasi-system --type json \
       -p '[{"op":"replace","path":"/spec/metadata/0","value":{"name":"redisHost","value":"drasi-redis:6379"}}]'
@@ -109,7 +109,25 @@ echo "=== Step 6: Fix source proxy (client=pg for knex) ==="
 kubectl set env deployment/stepup-proxy -n drasi-system client=pg
 
 echo ""
-echo "=== Step 7: Fix reactivator Dapr config (gRPC protocol + no app-port) ==="
+echo "=== Step 7: Register minimal SignalR provider (avoids actor config crash) ==="
+# The full SignalR provider definition from drasi init's manifest includes
+# endpoints and config_schema that trigger an actor configuration call on
+# the query-host, which crashes in main-branch builds. A minimal provider
+# (image only) registers cleanly.
+cat > /tmp/signalr-provider.yaml << 'EOF'
+kind: ReactionProvider
+apiVersion: v1
+name: SignalR
+spec:
+  services:
+    reaction:
+      image: reaction-signalr
+EOF
+kubectl delete reactionprovider SignalR -n drasi-system 2>/dev/null || true
+drasi apply -f /tmp/signalr-provider.yaml
+
+echo ""
+echo "=== Step 8: Fix reactivator Dapr config (gRPC protocol + no app-port) ==="
 # The reactivator is a gRPC client only — it doesn't serve HTTP or gRPC, so
 # app-port must be removed to prevent Dapr sidecar from waiting for it.
 kubectl patch deployment stepup-reactivator -n drasi-system --type json \
@@ -131,7 +149,11 @@ echo "=== Step 9: Expose dashboard via LoadBalancer ==="
 kubectl patch svc dashboard -n default-stepup -p '{"spec":{"type":"LoadBalancer"}}' 2>/dev/null || true
 
 echo ""
-echo "=== Step 10: Wait for pods to stabilise ==="
+echo "=== Step 10: Apply dashboard reaction (SignalR) ==="
+drasi apply -f drasi/dashboard-reaction.yaml 2>/dev/null || true
+
+echo ""
+echo "=== Step 11: Wait for pods to stabilise ==="
 sleep 15
 kubectl wait --for=condition=ready pod -n drasi-system \
   -l drasi/infra=api --timeout=60s 2>/dev/null || true
