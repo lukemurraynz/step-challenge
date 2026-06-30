@@ -15,6 +15,7 @@ public sealed class SimulatorService(IStepLogRepository repo, IOptions<Simulator
     public async Task<int?> TickAsync(CancellationToken ct = default)
     {
         if (_paused) return null;
+        if (await repo.GetContestStatusAsync(ct) != "running") return 0;
 
         var roster = await repo.GetParticipantIdsAsync(ct);
         if (roster.Count == 0) return 0;
@@ -31,11 +32,15 @@ public sealed class SimulatorService(IStepLogRepository repo, IOptions<Simulator
         return count;
     }
 
-    public Task ResetAsync(CancellationToken ct = default) => repo.ResetAsync(ct);
+    public async Task ResetAsync(CancellationToken ct = default) => await repo.ResetAsync(ct);
 
-    public Task AddManualAsync(string participantId, int steps, CancellationToken ct = default)
-        => repo.AddStepsAsync(participantId, steps, ct);
+    public async Task AddManualAsync(string participantId, int steps, CancellationToken ct = default)
+        => await repo.AddStepsAsync(participantId, steps, ct);
 
-    public Task StartContestAsync(int participants, CancellationToken ct = default)
-        => repo.StartContestAsync(Math.Clamp(participants, _opts.MinN, _opts.MaxN), ct);
+    public async Task StartContestAsync(int participants, CancellationToken ct = default)
+        => await repo.StartContestAsync(Math.Clamp(participants, _opts.MinN, _opts.MaxN), ct);
+
+    public async Task DeleteContestAsync(CancellationToken ct = default) => await repo.DeleteContestAsync(ct);
+
+    public async Task<string> GetStatusAsync(CancellationToken ct = default) => await repo.GetContestStatusAsync(ct);
 }

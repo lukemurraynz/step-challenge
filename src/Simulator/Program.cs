@@ -44,4 +44,11 @@ app.MapPost("/contest/start", async (int participants, SimulatorService sim, Can
     await sim.StartContestAsync(participants, ct); return Results.Ok(new { started = participants }); 
 });
 
+app.MapPost("/contest/delete", async (SimulatorService sim, CancellationToken ct) =>
+{ 
+    await sim.DeleteContestAsync(ct); return Results.Ok(new { deleted = true }); 
+});
+
+app.MapGet("/contest/status", async (SimulatorService sim, CancellationToken ct) => Results.Ok(new { status = await sim.GetStatusAsync(ct) }));
+
 app.Run();
