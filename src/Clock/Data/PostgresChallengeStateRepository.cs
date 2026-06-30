@@ -12,6 +12,7 @@ public sealed class PostgresChallengeStateRepository(NpgsqlDataSource dataSource
         WHERE dt.day_number = LEAST(
             (SELECT day_number FROM challenge_state) + 1,
             (SELECT max(day_number) FROM daily_targets))
+            AND (SELECT status FROM contest_state) = 'running'
         ON CONFLICT (id) DO UPDATE
             SET today = EXCLUDED.today, day_number = EXCLUDED.day_number,
                 daily_target = EXCLUDED.daily_target,

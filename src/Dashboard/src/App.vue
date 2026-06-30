@@ -1,12 +1,23 @@
 <script setup>
 import { ResultSet } from '@drasi/signalr-vue';
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 const hubUrl = 'http://localhost:8080/hub';
 const participants = ref(8);
+const status = ref('idle');
 const collectiveTarget = computed(() => participants.value * 300_000);
+
+async function fetchStatus() {
+  status.value = (await (await fetch('/api/contest/status')).json()).status;
+}
 async function startContest() {
   await fetch(`/api/contest/start?participants=${participants.value}`, { method: 'POST' });
+  await fetchStatus();
 }
+async function deleteContest() {
+  await fetch('/api/contest/delete', { method: 'POST' });
+  await fetchStatus();
+}
+onMounted(() => { fetchStatus(); setInterval(fetchStatus, 5000); });
 </script>
 
 <template>
@@ -16,6 +27,8 @@ async function startContest() {
     <form class="start" @submit.prevent="startContest">
       <input type="number" v-model.number="participants" min="2" max="20" />
       <button type="submit">Start contest</button>
+      <button type="button" @click="deleteContest">Delete contest</button>
+      <span class="status" :class="`status--${status}`">{{ status }}</span>
     </form>
 
     <!-- Group progress -->
@@ -92,4 +105,9 @@ main { max-width: 32rem; margin: 2rem auto; font-family: system-ui, sans-serif; 
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #ddd; }
 th:last-child, td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+.status { padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.8rem; text-transform: capitalize; }
+.status--idle { background: #eee; color: #555; }
+.status--running { background: #e6f4ea; color: #137333; }
+.status--finished { background: #fef7e0; color: #8a6d00; }
 </style>

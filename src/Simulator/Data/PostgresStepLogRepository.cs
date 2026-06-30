@@ -5,6 +5,8 @@ namespace StepChallenge.Simulator.Data;
 public sealed class PostgresStepLogRepository(NpgsqlDataSource dataSource) : IStepLogRepository
 {
     private const string GetParticipantsSql = "SELECT id FROM participants ORDER BY id;";
+    private const string GetStatusSql = "SELECT status FROM contest_state;";
+
     private static readonly string[] Names = ["Alex","Bo","Cam","Dee","Eli","Fin","Gus","Hana","Ivy","Jo","Kit","Lou","Max","Nia","Ola","Pat","Quin","Ravi","Sam","Tia"];
 
     private const string AddStepsSql = """
@@ -59,5 +61,26 @@ public sealed class PostgresStepLogRepository(NpgsqlDataSource dataSource) : ISt
             UPDATE contest_state SET participant_count=@n,status='running',started_at=now() WHERE id;
             """, conn, tx)) { s.Parameters.AddWithValue("n", n); await s.ExecuteNonQueryAsync(ct); }
         await tx.CommitAsync(ct);
+    }
+
+    public async Task DeleteContestAsync(CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var c = new NpgsqlCommand("""
+            TRUNCATE step_logs;
+            DELETE FROM participants;
+            INSERT INTO challenge_state SELECT TRUE,date,day_number,daily_target,cumulative_target FROM daily_targets WHERE day_number=1
+            ON CONFLICT (id) DO UPDATE SET today=EXCLUDED.today,day_number=EXCLUDED.day_number,daily_target=EXCLUDED.daily_target,cumulative_target=EXCLUDED.cumulative_target;
+            UPDATE contest_state SET participant_count=0,status='idle',started_at=NULL WHERE id;
+            """, conn, tx);
+        await c.ExecuteNonQueryAsync(ct);
+        await tx.CommitAsync(ct);
+    }
+
+    public async Task<string> GetContestStatusAsync(CancellationToken ct = default)
+    {
+        await using var cmd = dataSource.CreateCommand(GetStatusSql);
+        return await cmd.ExecuteScalarAsync(ct) as string ?? "idle";
     }
 }
