@@ -228,6 +228,11 @@ resource simulator 'Applications.Core/containers@2023-10-01-preview' = {
     container: {
       image: '${imageRegistry}/simulator:${imageTag}'
       imagePullPolicy: 'IfNotPresent'
+      ports: {
+        http: {
+          containerPort: 8080
+        }
+      }
       env: {
         PG_DSN: {
           value: 'Host=postgres.default.svc.cluster.local;Port=5432;Username=postgres;Password=postgres;Database=stepup'
@@ -235,11 +240,7 @@ resource simulator 'Applications.Core/containers@2023-10-01-preview' = {
       }
     }
     extensions: [
-      {
-        kind: 'daprSidecar'
-        appId: 'simulator'
-        appPort: 8080
-      }
+      { kind: 'daprSidecar', appId: 'simulator', appPort: 8080 }
     ]
   }
 }
