@@ -78,20 +78,25 @@ for comp in rg-pubsub-debug rg-pubsub-notifier; do
 done
 
 echo ""
-echo "=== Step 4: Create rg-state Dapr component (needed by source change-svc) ==="
+echo "=== Step 4: Create rg-state Dapr component (needed by source change-svc + reactivator) ==="
+# Default Drasi Redis lacks RedisJSON module, so the change-svc state query fails.
+# Switch to MongoDB which supports the Dapr state query API.
+kubectl delete component rg-state -n drasi-system 2>/dev/null || true
 kubectl apply -n drasi-system -f - <<YAML
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
   name: rg-state
 spec:
-  type: state.redis
+  type: state.mongodb
   version: v1
   metadata:
-    - name: redisHost
-      value: drasi-redis:6379
-    - name: redisPassword
-      value: ""
+    - name: host
+      value: drasi-mongo:27017
+    - name: databaseName
+      value: Drasi
+    - name: collectionName
+      value: rg-state
 YAML
 
 echo ""
@@ -104,9 +109,11 @@ echo "=== Step 6: Fix source proxy (client=pg for knex) ==="
 kubectl set env deployment/stepup-proxy -n drasi-system client=pg
 
 echo ""
-echo "=== Step 7: Fix reactivator Dapr gRPC protocol ==="
+echo "=== Step 7: Fix reactivator Dapr config (gRPC protocol + no app-port) ==="
+# The reactivator is a gRPC client only — it doesn't serve HTTP or gRPC, so
+# app-port must be removed to prevent Dapr sidecar from waiting for it.
 kubectl patch deployment stepup-reactivator -n drasi-system --type json \
-  -p '[{"op":"add","path":"/spec/template/metadata/annotations/dapr.io~1app-protocol","value":"grpc"}]'
+  -p '[{"op":"add","path":"/spec/template/metadata/annotations/dapr.io~1app-protocol","value":"grpc"},{"op":"remove","path":"/spec/template/metadata/annotations/dapr.io~1app-port"}]'
 
 echo ""
 echo "=== Step 8: Restart affected pods ==="
@@ -120,7 +127,11 @@ kubectl rollout restart deployment \
   stepup-query-api
 
 echo ""
-echo "=== Step 9: Wait for pods to stabilise ==="
+echo "=== Step 9: Expose dashboard via LoadBalancer ==="
+kubectl patch svc dashboard -n default-stepup -p '{"spec":{"type":"LoadBalancer"}}' 2>/dev/null || true
+
+echo ""
+echo "=== Step 10: Wait for pods to stabilise ==="
 sleep 15
 kubectl wait --for=condition=ready pod -n drasi-system \
   -l drasi/infra=api --timeout=60s 2>/dev/null || true
