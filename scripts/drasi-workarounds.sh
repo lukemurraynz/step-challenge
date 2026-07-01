@@ -24,14 +24,23 @@ cd "$ROOT"
 
 # ---- config (set these before running) ------------------------------------
 ACR="${ACR:-}"                     # e.g. stepupacrxxxx.azurecr.io (no protocol)
-DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
 
 # shellcheck disable=SC2317
 usage() {
-  echo "Usage: ACR=myacr.azurecr.io [DISCORD_WEBHOOK_URL=...] $0"
+  echo "Usage: ACR=myacr.azurecr.io $0"
   exit 1
 }
 [ -n "$ACR" ] || usage
+
+
+DRASI_COMPONENT_PREFIX=drasi
+if kubectl get component drasi-pubsub -n drasi-system >/dev/null 2>&1 || \
+   kubectl get component drasi-state -n drasi-system >/dev/null 2>&1; then
+  DRASI_COMPONENT_PREFIX=drasi
+elif kubectl get component rg-pubsub -n drasi-system >/dev/null 2>&1 || \
+     kubectl get component rg-state -n drasi-system >/dev/null 2>&1; then
+  DRASI_COMPONENT_PREFIX=rg
+fi
 
 echo "=== Step 1: Mirror Drasi images to ACR under project-drasi/ path ==="
 # The resource provider resolves images as ${ACR}/project-drasi/${image}:${tag}
@@ -60,7 +69,7 @@ for img in "${IMAGES_TO_IMPORT[@]}"; do
   echo "  Importing ghcr.io/drasi-project/${name}:${tag} → ${ACR}/project-drasi/${name}:main"
   az acr import -n "${ACR%.azurecr.io}" \
     --source "ghcr.io/drasi-project/${name}:${tag}" \
-    --image "project-drasi/${name}:main" 2>&1 | tail -1
+    --image "project-drasi/${name}:main" --force 2>&1 | tail -1
 done
 
 echo ""
@@ -69,8 +78,8 @@ kubectl patch configmap drasi-config -n drasi-system \
   -p "{\"data\":{\"ACR\":\"${ACR}\",\"IMAGE_VERSION_TAG\":\"main\",\"IMAGE_PULL_POLICY\":\"IfNotPresent\"}}"
 
 echo ""
-echo "=== Step 3: Fix Dapr pubsub components (rg-redis → actual Redis) ==="
-for comp in rg-pubsub-debug rg-pubsub-notifier rg-pubsub-dashboard; do
+echo "=== Step 3: Fix Dapr pubsub components (${DRASI_COMPONENT_PREFIX}-redis → actual Redis) ==="
+for comp in "${DRASI_COMPONENT_PREFIX}"-pubsub-debug "${DRASI_COMPONENT_PREFIX}"-pubsub-notifier "${DRASI_COMPONENT_PREFIX}"-pubsub-dashboard; do
   if kubectl get component "$comp" -n drasi-system &>/dev/null; then
     kubectl patch component "$comp" -n drasi-system --type json \
       -p '[{"op":"replace","path":"/spec/metadata/0","value":{"name":"redisHost","value":"drasi-redis:6379"}}]'
@@ -78,15 +87,15 @@ for comp in rg-pubsub-debug rg-pubsub-notifier rg-pubsub-dashboard; do
 done
 
 echo ""
-echo "=== Step 4: Create rg-state + rg-pubsub Dapr components ==="
+echo "=== Step 4: Create ${DRASI_COMPONENT_PREFIX}-state + ${DRASI_COMPONENT_PREFIX}-pubsub Dapr components ==="
 # rg-state: change-svc needs state query API which requires RedisJSON on Redis.
 # Standard Redis doesn't have it. Switch to MongoDB.
-kubectl delete component rg-state -n drasi-system 2>/dev/null || true
+kubectl delete component "${DRASI_COMPONENT_PREFIX}-state" -n drasi-system 2>/dev/null || true
 kubectl apply -n drasi-system -f - <<YAML
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: rg-state
+  name: ${DRASI_COMPONENT_PREFIX}-state
 spec:
   type: state.mongodb
   version: v1
@@ -96,12 +105,12 @@ spec:
     - name: databaseName
       value: Drasi
     - name: collectionName
-      value: rg-state
+      value: ${DRASI_COMPONENT_PREFIX}-state
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: rg-pubsub
+  name: ${DRASI_COMPONENT_PREFIX}-pubsub
 spec:
   type: pubsub.redis
   version: v1
@@ -129,23 +138,15 @@ echo ""
 echo "=== Step 5: Fix publish-api + query-host REDIS_BROKER (distroless DNS) ==="
 kubectl set env deployment/default-publish-api -n drasi-system \
   REDIS_BROKER="redis://drasi-redis.drasi-system.svc.cluster.local:6379"
-kubectl set env deployment/default-query-host -n drasi-system \
+QUERY_HOST_DEPLOY=
+for _ in 1 2 3 4 5; do
+  QUERY_HOST_DEPLOY=$(kubectl get deploy default-query-host -n drasi-system -o name 2>/dev/null || true)
+  [ -n "$QUERY_HOST_DEPLOY" ] && break
+  sleep 2
+done
+[ -n "$QUERY_HOST_DEPLOY" ] || { echo "default-query-host not ready yet." >&2; exit 1; }
+kubectl set env "$QUERY_HOST_DEPLOY" -n drasi-system \
   REDIS_BROKER="redis://drasi-redis.drasi-system.svc.cluster.local:6379"
-
-echo ""
-echo "=== Step 6: Fix source proxy + reactivator env ==="
-PROXY_DEPLOY=$(kubectl get deploy -n drasi-system -l 'drasi/type=source,drasi/service=proxy' -o name 2>/dev/null | head -1)
-[ -n "$PROXY_DEPLOY" ] && kubectl set env "$PROXY_DEPLOY" -n drasi-system client=pg
-REACTIVATOR_DEPLOY=$(kubectl get deploy -n drasi-system -l 'drasi/type=source,drasi/service=reactivator' -o name 2>/dev/null | head -1)
-[ -n "$REACTIVATOR_DEPLOY" ] && kubectl set env "$REACTIVATOR_DEPLOY" -n drasi-system PUBSUB=rg-pubsub
-
-echo ""
-echo "=== Step 7: Fix reactivator Dapr config (client-only gRPC) ==="
-REACTIVATOR_DEPLOY=$(kubectl get deploy -n drasi-system -l 'drasi/type=source,drasi/service=reactivator' -o name 2>/dev/null | head -1)
-if [ -n "$REACTIVATOR_DEPLOY" ]; then
-  kubectl patch "$REACTIVATOR_DEPLOY" -n drasi-system --type json \
-    -p '[{"op":"add","path":"/spec/template/metadata/annotations/dapr.io~1app-protocol","value":"grpc"},{"op":"remove","path":"/spec/template/metadata/annotations/dapr.io~1app-port"}]' 2>/dev/null || true
-fi
 
 echo ""
 echo "=== Step 8: Register minimal SignalR provider ==="

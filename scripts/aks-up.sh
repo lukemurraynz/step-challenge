@@ -102,7 +102,27 @@ ACR="$ACR.azurecr.io" bash scripts/drasi-workarounds.sh
 echo "Applying Drasi source..."
 drasi apply -f drasi/source.yaml
 echo "Waiting for source to become available..."
-drasi wait -f drasi/source.yaml -t 120 2>/dev/null || true
+drasi wait -f drasi/source.yaml -t 120
+
+DRASI_COMPONENT_PREFIX=drasi
+if kubectl get component drasi-pubsub -n drasi-system >/dev/null 2>&1 || \
+   kubectl get component drasi-state -n drasi-system >/dev/null 2>&1; then
+  DRASI_COMPONENT_PREFIX=drasi
+elif kubectl get component rg-pubsub -n drasi-system >/dev/null 2>&1 || \
+     kubectl get component rg-state -n drasi-system >/dev/null 2>&1; then
+  DRASI_COMPONENT_PREFIX=rg
+fi
+
+echo "Applying source worker fixes..."
+PROXY_DEPLOY=$(kubectl get deploy -n drasi-system -l 'drasi/type=source,drasi/service=proxy' -o name 2>/dev/null | head -1)
+[ -n "$PROXY_DEPLOY" ] && kubectl set env "$PROXY_DEPLOY" -n drasi-system client=pg
+REACTIVATOR_DEPLOY=$(kubectl get deploy -n drasi-system -l 'drasi/type=source,drasi/service=reactivator' -o name 2>/dev/null | head -1)
+[ -n "$REACTIVATOR_DEPLOY" ] && kubectl set env "$REACTIVATOR_DEPLOY" -n drasi-system PUBSUB="${DRASI_COMPONENT_PREFIX}-pubsub"
+if [ -n "$REACTIVATOR_DEPLOY" ]; then
+  kubectl patch "$REACTIVATOR_DEPLOY" -n drasi-system --type json \
+    -p '[{"op":"add","path":"/spec/template/metadata/annotations/dapr.io~1app-protocol","value":"grpc"},{"op":"remove","path":"/spec/template/metadata/annotations/dapr.io~1app-port"}]' 2>/dev/null || true
+fi
+
 echo "Applying Drasi queries..."
 for q in behind-pace collective-progress daily-smashed new-leader race-to-goal; do
   drasi apply -f "drasi/$q.yaml"
