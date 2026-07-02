@@ -49,12 +49,11 @@ rad app delete stepup --yes 2>/dev/null || true
 # the shared Redis + pub/sub component, and the app namespace (secret + Dapr
 # components). Removing Redis also clears the stepup-events stream, so the next
 # spin-up starts clean (no stale-event replay).
-echo "Cleaning up Postgres, Redis, and the app namespace..."
+echo "Cleaning up Postgres, and the app namespace..."
 kubectl delete deploy/postgres svc/postgres configmap/stepup-initdb pvc/postgres-data \
   -n default --ignore-not-found
-kubectl delete -f k8s/redis.yaml --ignore-not-found
-kubectl delete -f k8s/pubsub.yaml --ignore-not-found
 kubectl delete namespace default-stepup --ignore-not-found
+kubectl delete component stepup-pubsub -n drasi-system --ignore-not-found
 
 cat <<DONE
 

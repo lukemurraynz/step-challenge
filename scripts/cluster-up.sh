@@ -2,25 +2,24 @@
 set -euo pipefail
 
 # StepUp one-shot spin-up on Docker Desktop + kind, deployed via Radius.
-#   kind  ->  Dapr+Drasi (drasi init)  ->  Radius  ->  shared Redis + drasi-system
-#   pub/sub  ->  build/load images  ->  rad deploy (Postgres + 4 services + Dapr
-#   components)  ->  webhook secret + sidecar restart  ->  Drasi source/queries/reactions.
-# Prereqs: Docker Desktop running; kind, kubectl, rad, drasi, docker on PATH.
-# One-time platform bits (drasi init, rad install/init) run/instruct if missing.
-# Designed for a FRESH cluster. For a clean re-run: kind delete cluster --name stepup.
+#   kind -> Drasi+Dapr -> Dapr(app) -> Radius -> recipes -> build/load images ->
+#   namespaces + webhook secret -> rad deploy (Postgres + Redis recipe + 4 services
+#   + Dapr components) -> sidecar restart -> Drasi source/queries/reactions.
+# Prereqs: Docker Desktop running; kind, kubectl, rad, drasi, dapr, docker on PATH.
+# Idempotent. For a clean slate: kind delete cluster --name stepup.
 # Run from anywhere; paths resolve to the repo root.
 
 CLUSTER=stepup
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# kind must use the Docker provider — clear any stale podman override from the
-# abandoned Podman experiment, or `kind load` hits "no nodes found".
+# kind must use the Docker provider — clear any stale podman override, or
+# `kind load` hits "no nodes found".
 unset KIND_EXPERIMENTAL_PROVIDER
 
 # --- 0. Preflight -----------------------------------------------------------
 docker info >/dev/null 2>&1 || { echo "Docker Desktop isn't running." >&2; exit 1; }
-for t in kind kubectl rad drasi docker; do
+for t in kind kubectl rad drasi dapr docker; do
   command -v "$t" >/dev/null 2>&1 || { echo "Missing tool: $t" >&2; exit 1; }
 done
 
@@ -33,12 +32,26 @@ else
 fi
 kubectl config use-context "kind-$CLUSTER" >/dev/null
 
-# --- 2. Dapr + Drasi control plane (drasi init installs both) ---------------
+# Point the drasi CLI at THIS cluster. It caches its last target in ~/.drasi, so
+# after any AKS run `drasi` commands would otherwise hit the cloud cluster
+# ("dial tcp ... stepup-aks-...: no such host").
+drasi env kube
+
+# --- 2. Drasi + Dapr control plane (drasi init installs both) ---------------
 if kubectl get namespace drasi-system >/dev/null 2>&1; then
   echo "Drasi already installed."
 else
-  echo "Installing Dapr + Drasi (a few minutes)..."
+  echo "Installing Drasi + Dapr (a few minutes)..."
   drasi init
+fi
+
+# --- 2b. Ensure a Dapr control plane for the app. drasi init doesn't reliably
+#         leave the components.dapr.io CRD + injector the app's Dapr components
+#         need. Pin 1.14 to match Drasi/AKS and avoid Dapr 1.18's fatal-on-
+#         component behaviour, which crash-loops the notifier on a secret race.
+if ! kubectl get crd components.dapr.io >/dev/null 2>&1; then
+  echo "Installing Dapr control plane (1.14)..."
+  dapr init -k --runtime-version 1.14.4 --wait
 fi
 
 # --- 3. Radius control plane + environment ----------------------------------
@@ -52,13 +65,7 @@ fi
 echo "Configuring Radius environment + recipes..."
 bash scripts/radius-recipes.sh
 
-# --- 4. Shared Redis + the drasi-system pub/sub component --------------------
-echo "Deploying shared Redis + Dapr pub/sub component..."
-kubectl apply -f k8s/redis.yaml
-kubectl apply -f k8s/pubsub.yaml   # drasi-system stepup-pubsub (the 'default' one is now unused)
-kubectl wait --for=condition=ready pod -l app=redis --timeout=120s
-
-# --- 5. Build + side-load the four service images ---------------------------
+# --- 4. Build + side-load the four service images ---------------------------
 echo "Building and loading images..."
 for svc in Simulator Clock Notifier Dashboard; do
   img="stepup/$(echo "$svc" | tr '[:upper:]' '[:lower:]'):local"
@@ -66,25 +73,31 @@ for svc in Simulator Clock Notifier Dashboard; do
   kind load docker-image "$img" --name "$CLUSTER"
 done
 
-# --- 6. Deploy the app via Radius (Postgres + 4 services + Dapr components) --
-echo "Deploying StepUp via Radius..."
-rad deploy infra/app.bicep
-kubectl wait --for=condition=ready pod -l app=postgres -n default --timeout=180s
-
-# --- 7. Discord webhook secret (app namespace exists now) -------------------
+# --- 5. Namespaces + webhook secret BEFORE rad deploy -----------------------
+#        The notifier's `discord` binding resolves its secretKeyRef at startup, so
+#        the secret must exist before deploy. The drasi-system pubsub component
+#        (the recipe-Redis broker the Drasi reaction shares) needs its namespace.
+#        All idempotent.
 WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-$(sed -n 's/.*"discordWebhookUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' src/Notifier/secrets.json 2>/dev/null)}"
 [ -n "$WEBHOOK_URL" ] || { echo "Set DISCORD_WEBHOOK_URL or provide src/Notifier/secrets.json." >&2; exit 1; }
+kubectl create namespace drasi-system   --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace default-stepup --dry-run=client -o yaml | kubectl apply -f -
 kubectl create secret generic notifier-webhook -n default-stepup \
   --from-literal=url="$WEBHOOK_URL" --dry-run=client -o yaml | kubectl apply -f -
 
-# Dapr sidecars only load components/secrets present at startup, and on a fresh
-# deploy a container can win the race against its component. Restart the Dapr
-# services so they reliably pick up ticker / clock-cron / pub-sub / the secret.
+# --- 6. Deploy the app via Radius -------------------------------------------
+#        Tolerate a first-pass notifier failure (Dapr secret-timing race); the
+#        rollout restart clears it and the rollout status then asserts real health.
+echo "Deploying StepUp via Radius..."
+rad deploy infra/app.bicep --group default --environment default \
+  || echo "  (first deploy reported a failure — recovering the Dapr services below)"
+kubectl wait --for=condition=ready pod -l app=postgres -n default --timeout=180s
+
 echo "Restarting Dapr services so sidecars load their components..."
 for d in simulator clock notifier; do kubectl rollout restart "deploy/$d" -n default-stepup; done
-for d in simulator clock notifier; do kubectl rollout status  "deploy/$d" -n default-stepup --timeout=120s; done
+for d in simulator clock notifier; do kubectl rollout status  "deploy/$d" -n default-stepup --timeout=180s; done
 
-# --- 8. Drasi: source -> queries -> reactions -------------------------------
+# --- 7. Drasi: source -> queries -> reactions -------------------------------
 echo "Applying Drasi source..."
 drasi apply -f drasi/source.yaml
 drasi wait  -f drasi/source.yaml -t 180

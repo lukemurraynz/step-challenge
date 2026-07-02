@@ -90,12 +90,6 @@ jobs:
           rad install kubernetes
           AZ_SUB="${{ vars.AZURE_SUBSCRIPTION_ID }}" AZ_RG="$RG" bash scripts/radius-recipes.sh
 
-      - name: Shared Redis + pub/sub
-        run: |
-          kubectl apply -f k8s/redis.yaml
-          kubectl apply -f k8s/pubsub.yaml
-          kubectl wait --for=condition=ready pod -l app=redis --timeout=120s
-
       - name: Webhook secret (before deploy — notifier needs it at startup)
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

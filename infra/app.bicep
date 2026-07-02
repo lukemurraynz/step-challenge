@@ -22,6 +22,20 @@ resource app 'Applications.Core/applications@2023-10-01-preview' = {
 }
 
 // ---------------------------------------------------------------------------
+// Portable Redis via a Radius recipe. The 'default' recipe (registered by
+// scripts/radius-recipes.sh) runs a Redis container in THIS app's namespace and
+// outputs an FQDN host, so the drasi-system reaction can reach the SAME broker.
+// ---------------------------------------------------------------------------
+resource cache 'Applications.Datastores/redisCaches@2023-10-01-preview' = {
+  name: 'stepup-redis'
+  properties: {
+    environment: environment
+    application: app.id
+    // no recipe.name => uses the 'default' recipe registered for redisCaches
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Postgres with logical replication for StepUp + the Drasi source.
 // Deployed as raw Kubernetes resources so Radius owns it without a recipe.
 // Pinned to Service `postgres` in namespace `default`, so the Drasi source host
@@ -267,7 +281,7 @@ resource ticker 'dapr.io/Component@v1alpha1' = {
 }
 
 // ---------------------------------------------------------------------------
-// Dapr pub/sub over the SHARED Redis (redis.default) — the same broker the
+// Dapr pub/sub over the recipe — the same broker the
 // Drasi PostDaprPubSub reaction publishes to, so the notifier sees those events.
 // ---------------------------------------------------------------------------
 resource pubsub 'dapr.io/Component@v1alpha1' = {
@@ -279,7 +293,7 @@ resource pubsub 'dapr.io/Component@v1alpha1' = {
     type: 'pubsub.redis'
     version: 'v1'
     metadata: [
-      { name: 'redisHost', value: 'redis.default.svc.cluster.local:6379' }
+      { name: 'redisHost', value: '${cache.properties.host}:${cache.properties.port}' }
       { name: 'redisPassword', value: '' }
     ]
   }
@@ -313,6 +327,26 @@ resource discord 'dapr.io/Component@v1alpha1' = {
     secretStore: 'kubernetes'
   }
   scopes: [ 'notifier' ]
+}
+
+// The Drasi PostDaprPubSub reaction publishes to the SAME broker + topic the
+// notifier subscribes to. It gets its own stepup-pubsub component, pointed at
+// the recipe's Redis by FQDN. Needs the drasi-system namespace to exist at deploy
+// time — drasi init runs before rad deploy in every real flow; the CI smoke job
+// creates an empty drasi-system namespace.
+resource pubsubDrasi 'dapr.io/Component@v1alpha1' = {
+  metadata: {
+    name: 'stepup-pubsub'
+    namespace: 'drasi-system'
+  }
+  spec: {
+    type: 'pubsub.redis'
+    version: 'v1'
+    metadata: [
+      { name: 'redisHost', value: '${cache.properties.host}:${cache.properties.port}' }
+      { name: 'redisPassword', value: '' }
+    ]
+  }
 }
 
 // ---------------------------------------------------------------------------
