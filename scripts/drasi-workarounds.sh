@@ -127,7 +127,7 @@ phase_pre() {
     -p "{\"data\":{\"ACR\":\"${ACR}\",\"IMAGE_VERSION_TAG\":\"main\",\"IMAGE_PULL_POLICY\":\"IfNotPresent\"}}"
 
   echo ""
-  echo "=== [pre] Create ${DRASI_COMPONENT_PREFIX}-state + ${DRASI_COMPONENT_PREFIX}-pubsub + stepup-pubsub ==="
+  echo "=== [pre] Create ${DRASI_COMPONENT_PREFIX}-state + ${DRASI_COMPONENT_PREFIX}-pubsub ==="
   # change-svc needs the Dapr state query API, which needs RedisJSON. Stock Redis
   # lacks it, so back the state store with MongoDB instead.
   kubectl delete component "${DRASI_COMPONENT_PREFIX}-state" -n "$NS" 2>/dev/null || true
@@ -157,19 +157,6 @@ spec:
   metadata:
     - name: redisHost
       value: drasi-redis:6379
-    - name: redisPassword
-      value: ""
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: stepup-pubsub
-spec:
-  type: pubsub.redis
-  version: v1
-  metadata:
-    - name: redisHost
-      value: redis.default.svc.cluster.local:6379
     - name: redisPassword
       value: ""
 YAML

@@ -20,18 +20,24 @@ NS=default
 RECIPE_PREFIX="${RECIPE_PREFIX:-ghcr.io/radius-project/recipes/local-dev}"
 RECIPE_TAG="${RECIPE_TAG:-latest}"
 
-# 0. Pin a CLI workspace to the current cluster. An ephemeral CI runner has no
-#    ~/.rad/config.yaml, so rad otherwise falls back to a scope-less workspace and
-#    builds invalid UCP URLs — GET .../Applications.Core/environments/default returns
-#    "is invalid" (no resource-group segment), which fails rad recipe register.
-#    Pinning a workspace supplies the /planes/radius/local/resourcegroups/default
-#    scope. Local runs already have a workspace from `rad init`; --force is idempotent.
-rad workspace create kubernetes "$ENV" --group "$GROUP" --environment "$ENV" --force
+# 0. Pin a BARE CLI workspace (UCP plane + connection to the current cluster).
+#    Do NOT pass --group/--environment here: rad validates they already exist and
+#    fails ("resource group default does not exist. Run rad env create") on a
+#    cluster where they don't yet — which is the case when `rad install kubernetes`
+#    skips ("already installed") without creating them. The group + env are created
+#    in step 1; the flags go on the re-pin in 1b once they exist. On a bare CI
+#    runner this workspace also replaces the scope-less fallback that made rad build
+#    invalid UCP URLs for `rad recipe register`.
+rad workspace create kubernetes "$ENV" --force
 
 # 1. Ensure the Radius resource group + environment exist (idempotent).
 rad group show "$GROUP" >/dev/null 2>&1 || rad group create "$GROUP"
 rad env show "$ENV" --group "$GROUP" >/dev/null 2>&1 \
   || rad env create "$ENV" --group "$GROUP" --namespace "$NS"
+
+# 1b. Re-pin the workspace with the now-existing group + env as its defaults, so a
+#     bare `rad deploy` (cluster-up.sh / aks-up.sh) resolves them without flags.
+rad workspace create kubernetes "$ENV" --group "$GROUP" --environment "$ENV" --force
 
 # 2. Register the portable-resource Recipes (PR1: Redis only). Re-running
 #    overwrites the recipe, so this is safe on every spin-up.

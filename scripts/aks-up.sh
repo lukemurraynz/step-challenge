@@ -68,12 +68,7 @@ echo "Configuring Radius environment + recipes (Azure provider scope)..."
 AZ_SUB="$(az account show --query id -o tsv | tr -d '\r')" AZ_RG="$RG" bash scripts/radius-recipes.sh
 rad workspace show
 
-# --- 5. Shared Redis + the drasi-system pub/sub component --------------------
-kubectl apply -f k8s/redis.yaml
-kubectl apply -f k8s/pubsub.yaml
-kubectl wait --for=condition=ready pod -l app=redis --timeout=120s
-
-# --- 6. Webhook secret BEFORE rad deploy (so the notifier never starts -------
+# --- 5. Webhook secret BEFORE rad deploy (so the notifier never starts -------
 #        without it — that crashed the notifier on the first manual run) ------
 kubectl create namespace default-stepup --dry-run=client -o yaml | kubectl apply -f -
 WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-$(sed -n 's/.*"discordWebhookUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' src/Notifier/secrets.json 2>/dev/null)}"
@@ -81,7 +76,7 @@ WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-$(sed -n 's/.*"discordWebhookUrl"[[:space:]]
 kubectl create secret generic notifier-webhook -n default-stepup \
   --from-literal=url="$WEBHOOK_URL" --dry-run=client -o yaml | kubectl apply -f -
 
-# --- 7. Deploy the app via Radius, pointing at the ACR images ----------------
+# --- 6. Deploy the app via Radius, pointing at the ACR images ----------------
 echo "Deploying StepUp via Radius..."
 rad deploy infra/app.bicep \
   --parameters imageRegistry="$ACR.azurecr.io" \
@@ -92,7 +87,7 @@ kubectl wait --for=condition=ready pod -l app=postgres -n default --timeout=180s
 for d in simulator clock notifier; do kubectl rollout restart "deploy/$d" -n default-stepup; done
 for d in simulator clock notifier; do kubectl rollout status  "deploy/$d" -n default-stepup --timeout=180s; done
 
-# --- 8. Drasi: phased workarounds around source -> queries -> reactions -----
+# --- 7. Drasi: phased workarounds around source -> queries -> reactions -----
 # drasi init above installs the control plane. Due to a pre-1.0 image tag
 # mismatch (the platform release tag doesn't match GHCR image tags), several
 # runtime fixes are needed. Those fixes must interleave with `drasi apply`
