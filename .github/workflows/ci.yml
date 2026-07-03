@@ -61,7 +61,7 @@ jobs:
           wget -q "https://raw.githubusercontent.com/dapr/cli/master/install/install.sh" -O - | /bin/bash
 
       - name: Install Dapr control plane (no Drasi)
-        run: dapr init -k --wait
+        run: dapr init -k --runtime-version 1.14.4 --wait
 
       - name: Install Radius + register the Redis recipe
         run: |
