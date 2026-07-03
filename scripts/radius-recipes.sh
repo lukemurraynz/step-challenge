@@ -9,16 +9,19 @@ set -euo pipefail
 #   AZ_SUB  Azure subscription id
 #   AZ_RG   Azure resource group where Azure-native recipes will deploy
 #
-# Recipes come from the public Radius local-dev pack (container-based, work on
-# both kind and AKS), so no OCI publishing is needed yet. Override with:
+# The Redis + secret-store Recipes come from the public Radius local-dev pack
+# (container-based, work on both kind and AKS). The Postgres extender is our own
+# recipe, published to public GHCR via `rad bicep publish`. Override with:
 #   RECIPE_PREFIX (default ghcr.io/radius-project/recipes/local-dev)
 #   RECIPE_TAG    (default latest)
+#   PG_RECIPE     (default ghcr.io/willvelida/stepup-recipes/postgres)
 
 GROUP=default
 ENV=default
 NS=default
 RECIPE_PREFIX="${RECIPE_PREFIX:-ghcr.io/radius-project/recipes/local-dev}"
 RECIPE_TAG="${RECIPE_TAG:-latest}"
+PG_RECIPE="${PG_RECIPE:-ghcr.io/willvelida/stepup-recipes/postgres}"
 
 # 0. Pin a BARE CLI workspace (UCP plane + connection to the current cluster).
 #    Do NOT pass --group/--environment here: rad validates they already exist and
@@ -39,8 +42,8 @@ rad env show "$ENV" --group "$GROUP" >/dev/null 2>&1 \
 #     bare `rad deploy` (cluster-up.sh / aks-up.sh) resolves them without flags.
 rad workspace create kubernetes "$ENV" --group "$GROUP" --environment "$ENV" --force
 
-# 2. Register the portable-resource Recipes (PR1: Redis only). Re-running
-#    overwrites the recipe, so this is safe on every spin-up.
+# 2. Register the portable-resource Recipes (Redis, secret store, Postgres).
+#    Re-running overwrites the recipe, so this is safe on every spin-up.
 rad recipe register default \
   --environment "$ENV" --group "$GROUP" \
   --resource-type Applications.Datastores/redisCaches \
@@ -52,6 +55,15 @@ rad recipe register default \
   --resource-type Applications.Dapr/secretStores \
   --template-kind bicep \
   --template-path "$RECIPE_PREFIX/secretstores:$RECIPE_TAG"
+
+# StepUp's own Postgres recipe (Applications.Core/extenders): logical-replication
+# Postgres + init SQL + drasi role, pinned to Service `postgres` in namespace
+# `default` so the Drasi source host stays postgres.default.svc.cluster.local.
+rad recipe register default \
+  --environment "$ENV" --group "$GROUP" \
+  --resource-type Applications.Core/extenders \
+  --template-kind bicep \
+  --template-path "$PG_RECIPE:$RECIPE_TAG"
 
 # 3. On Azure, give the environment a provider scope so Azure-native recipes
 #    (later PRs) have somewhere to deploy. Skipped locally.
