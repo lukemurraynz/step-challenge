@@ -302,8 +302,8 @@ resource pubsub 'dapr.io/Component@v1alpha1' = {
 
 // ---------------------------------------------------------------------------
 // Dapr HTTP output binding to the Discord webhook. URL read from the
-// 'notifier-webhook' k8s secret (key 'url') via Dapr's built-in 'kubernetes'
-// secret store — create that secret in default-stepup (see below).
+// 'notifier-webhook' k8s secret (key 'url') via the portable 'stepup-secrets'
+// Dapr secret store — secretstores.kubernetes locally, Key Vault on Azure.
 // ---------------------------------------------------------------------------
 resource discord 'dapr.io/Component@v1alpha1' = {
   metadata: {
@@ -324,9 +324,21 @@ resource discord 'dapr.io/Component@v1alpha1' = {
     ]
   }
   auth: {
-    secretStore: 'kubernetes'
+    secretStore: 'stepup-secrets'
   }
   scopes: [ 'notifier' ]
+  dependsOn: [ secrets ] 
+}
+
+// Portable Dapr secret store. Local recipe = secretstores.kubernetes (reads the
+// notifier-webhook k8s Secret); the Azure recipe swaps it for Key Vault. The
+// recipe names the Dapr component after this resource ('stepup-secrets').
+resource secrets 'Applications.Dapr/secretStores@2023-10-01-preview' = {
+  name: 'stepup-secrets'
+  properties: {
+    environment: environment
+    application: app.id
+  }
 }
 
 // The Drasi PostDaprPubSub reaction publishes to the SAME broker + topic the
