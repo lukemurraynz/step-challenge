@@ -13,6 +13,16 @@ param imageTag string = 'local'
 @description('Registry/prefix for the service images. Local default "stepup"; for ACR set your login server, e.g. "myregistry.azurecr.io".')
 param imageRegistry string = 'stepup'
 
+@description('Azure target: provision managed Azure services directly + wire passwordless access. Local (kind) leaves this false and uses the container recipes.')
+param isAzure bool = false
+
+@description('Discord webhook URL. On Azure it seeds the Key Vault secret; locally the notifier-webhook k8s Secret is used instead.')
+@secure()
+param discordWebhookUrl string = ''
+
+@description('Azure region for managed resources (Azure target only).')
+param azLocation string = 'australiaeast'
+
 // The Radius application. Containers (added next) will reference app.id.
 resource app 'Applications.Core/applications@2023-10-01-preview' = {
   name: 'stepup'
@@ -45,6 +55,27 @@ resource postgres 'Applications.Core/extenders@2023-10-01-preview' = {
   properties: {
     environment: environment
     application: app.id
+  }
+}
+
+// Azure Key Vault holding the Discord webhook (and later the drasi password),
+// read passwordlessly by the notifier's daprd via Workload Identity. Azure-only.
+resource keyvault 'Microsoft.KeyVault/vaults@2023-07-01' = if (isAzure) {
+  name: 'stepup-${uniqueString(resourceGroup().id)}'
+  location: azLocation
+  properties: {
+    tenantId: subscription().tenantId
+    enableRbacAuthorization: true
+    sku: {
+      name: 'standard'
+      family: 'A'
+    }
+  }
+  resource discordSecret 'secrets' = {
+    name: 'discord-webhook'
+    properties: {
+      value: discordWebhookUrl
+    }
   }
 }
 
@@ -112,7 +143,8 @@ resource pubsub 'dapr.io/Component@v1alpha1' = {
     version: 'v1'
     metadata: [
       { name: 'redisHost', value: '${cache.properties.host}:${cache.properties.port}' }
-      { name: 'redisPassword', value: '' }
+      { name: 'redisPassword', value: cache.listSecrets().password }
+      { name: 'enableTLS', value: '${cache.properties.tls}' }
     ]
   }
   scopes: [ 'notifier' ]
@@ -131,32 +163,41 @@ resource discord 'dapr.io/Component@v1alpha1' = {
   spec: {
     type: 'bindings.http'
     version: 'v1'
-    metadata: [
-      {
-        name: 'url'
-        secretKeyRef: {
-          name: 'notifier-webhook'
-          key: 'url'
-        }
-      }
+    metadata: isAzure ? [
+      { name: 'url', secretKeyRef: { name: 'discord-webhook' } }
+    ] : [
+      { name: 'url', secretKeyRef: { name: 'notifier-webhook', key: 'url' } }
     ]
   }
   auth: {
     secretStore: 'stepup-secrets'
   }
   scopes: [ 'notifier' ]
-  dependsOn: [ secrets ] 
 }
 
-// Portable Dapr secret store. Local recipe = secretstores.kubernetes (reads the
-// notifier-webhook k8s Secret); the Azure recipe swaps it for Key Vault. The
-// recipe names the Dapr component after this resource ('stepup-secrets').
-resource secrets 'Applications.Dapr/secretStores@2023-10-01-preview' = {
+// Local: portable Dapr secret store recipe (secretstores.kubernetes → notifier-webhook k8s Secret).
+resource secrets 'Applications.Dapr/secretStores@2023-10-01-preview' = if (!isAzure) {
   name: 'stepup-secrets'
   properties: {
     environment: environment
     application: app.id
   }
+}
+
+// Azure: Dapr Key Vault secret store, read via the notifier pod's Workload Identity.
+resource secretsAzure 'dapr.io/Component@v1alpha1' = if (isAzure) {
+  metadata: {
+    name: 'stepup-secrets'
+    namespace: 'default-stepup'
+  }
+  spec: {
+    type: 'secretstores.azure.keyvault'
+    version: 'v1'
+    metadata: [
+      { name: 'vaultName', value: keyvault.name }
+    ]
+  }
+  scopes: [ 'notifier' ]
 }
 
 // The Drasi PostDaprPubSub reaction publishes to the SAME broker + topic the
@@ -174,7 +215,8 @@ resource pubsubDrasi 'dapr.io/Component@v1alpha1' = {
     version: 'v1'
     metadata: [
       { name: 'redisHost', value: '${cache.properties.host}:${cache.properties.port}' }
-      { name: 'redisPassword', value: '' }
+      { name: 'redisPassword', value: cache.listSecrets().password }
+      { name: 'enableTLS', value: '${cache.properties.tls}' }
     ]
   }
 }
@@ -198,6 +240,15 @@ resource notifier 'Applications.Core/containers@2023-10-01-preview' = {
         appPort: 8080
       }
     ]
+    connections: isAzure ? {
+      vault: {
+        source: keyvault.id
+        iam: {
+          kind: 'azure'
+          roles: [ 'Key Vault Secrets User' ]
+        }
+      }
+    } : {}
   }
 }
 

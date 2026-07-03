@@ -22,6 +22,14 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
   }
   properties: {
     dnsPrefix: aksName
+    oidcIssuerProfile: {
+      enabled: true
+    }
+    securityProfile: {
+      workloadIdentity: {
+        enabled: true
+      }
+    }
     agentPoolProfiles: [
       {
         name: 'systempool'
@@ -37,3 +45,4 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
 
 output name string = aks.name
 output kubeletObjectId string = aks.properties.identityProfile.kubeletidentity.objectId
+output oidcIssuerUrl string = aks.properties.oidcIssuerProfile.issuerURL
