@@ -47,6 +47,12 @@ rad recipe register default \
   --template-kind bicep \
   --template-path "$RECIPE_PREFIX/rediscaches:$RECIPE_TAG"
 
+rad recipe register default \
+  --environment "$ENV" --group "$GROUP" \
+  --resource-type Applications.Dapr/secretStores \
+  --template-kind bicep \
+  --template-path "$RECIPE_PREFIX/secretstores:$RECIPE_TAG"
+
 # 3. On Azure, give the environment a provider scope so Azure-native recipes
 #    (later PRs) have somewhere to deploy. Skipped locally.
 if [ -n "${AZ_SUB:-}" ] && [ -n "${AZ_RG:-}" ]; then
