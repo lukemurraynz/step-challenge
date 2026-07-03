@@ -65,7 +65,8 @@ else
 fi
 # Ensure the 'default' env + recipes, and point the Azure provider at stepup-rg.
 echo "Configuring Radius environment + recipes (Azure provider scope)..."
-AZ_SUB="$(az account show --query id -o tsv | tr -d '\r')" AZ_RG="$RG" bash scripts/radius-recipes.sh
+OIDC_ISSUER="$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerURL -o tsv | tr -d '\r')"
+AZ_SUB="$(az account show --query id -o tsv | tr -d '\r')" AZ_RG="$RG" OIDC_ISSUER="$OIDC_ISSUER" bash scripts/radius-recipes.sh
 rad workspace show
 
 # --- 5. Webhook secret BEFORE rad deploy (so the notifier never starts -------
@@ -80,7 +81,11 @@ kubectl create secret generic notifier-webhook -n default-stepup \
 echo "Deploying StepUp via Radius..."
 rad deploy infra/app.bicep \
   --parameters imageRegistry="$ACR.azurecr.io" \
-  --parameters imageTag="$TAG"
+  --parameters imageTag="$TAG" \
+  --parameters isAzure=true \
+  --parameters discordWebhookUrl="$WEBHOOK_URL" \
+  --parameters azLocation="$LOCATION" \
+  || echo "rad deploy reported a failure (likely the notifier startup race); the rollout restart below recovers it."
 kubectl wait --for=condition=ready pod -l app=postgres -n default --timeout=180s
 
 # Restart Dapr services so sidecars reliably load their components.
