@@ -60,22 +60,13 @@ resource postgres 'Applications.Core/extenders@2023-10-01-preview' = {
 
 // Azure Key Vault holding the Discord webhook (and later the drasi password),
 // read passwordlessly by the notifier's daprd via Workload Identity. Azure-only.
-resource keyvault 'Microsoft.KeyVault/vaults@2023-07-01' = if (isAzure) {
-  name: 'stepup-${uniqueString(resourceGroup().id)}'
-  location: azLocation
-  properties: {
-    tenantId: subscription().tenantId
-    enableRbacAuthorization: true
-    sku: {
-      name: 'standard'
-      family: 'A'
-    }
-  }
-  resource discordSecret 'secrets' = {
-    name: 'discord-webhook'
-    properties: {
-      value: discordWebhookUrl
-    }
+// Azure-only managed resources live in a conditional module so app.bicep's
+// top-level template carries no Microsoft.* Azure types (see infra/azure.bicep).
+module azure 'azure.bicep' = if (isAzure) {
+  name: 'stepup-azure'
+  params: {
+    discordWebhookUrl: discordWebhookUrl
+    azLocation: azLocation
   }
 }
 
@@ -194,7 +185,7 @@ resource secretsAzure 'dapr.io/Component@v1alpha1' = if (isAzure) {
     type: 'secretstores.azure.keyvault'
     version: 'v1'
     metadata: [
-      { name: 'vaultName', value: keyvault.name }
+      { name: 'vaultName', value: azure.outputs.keyVaultName }
     ]
   }
   scopes: [ 'notifier' ]
@@ -242,7 +233,7 @@ resource notifier 'Applications.Core/containers@2023-10-01-preview' = {
     ]
     connections: isAzure ? {
       vault: {
-        source: keyvault.id
+        source: azure.outputs.keyVaultId
         iam: {
           kind: 'azure'
           roles: [ 'Key Vault Secrets User' ]
