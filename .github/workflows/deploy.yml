@@ -101,17 +101,12 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Deploy StepUp via Radius
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           rad deploy infra/app.bicep \
             --group default \
             --environment default \
             --parameters imageRegistry="$ACR.azurecr.io" \
             --parameters imageTag="$TAG" \
-            --parameters isAzure=true \
-            --parameters discordWebhookUrl="$DISCORD_WEBHOOK_URL" \
-            --parameters azLocation="${{ vars.LOCATION }}" \
             || echo "rad deploy reported a failure (likely the notifier startup race); the rollout restart below recovers it."
           kubectl wait --for=condition=ready pod -l app=postgres -n default --timeout=180s
 

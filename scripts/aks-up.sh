@@ -82,9 +82,6 @@ echo "Deploying StepUp via Radius..."
 rad deploy infra/app.bicep \
   --parameters imageRegistry="$ACR.azurecr.io" \
   --parameters imageTag="$TAG" \
-  --parameters isAzure=true \
-  --parameters discordWebhookUrl="$WEBHOOK_URL" \
-  --parameters azLocation="$LOCATION" \
   || echo "rad deploy reported a failure (likely the notifier startup race); the rollout restart below recovers it."
 kubectl wait --for=condition=ready pod -l app=postgres -n default --timeout=180s
 

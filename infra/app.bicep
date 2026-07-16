@@ -13,16 +13,6 @@ param imageTag string = 'local'
 @description('Registry/prefix for the service images. Local default "stepup"; for ACR set your login server, e.g. "myregistry.azurecr.io".')
 param imageRegistry string = 'stepup'
 
-@description('Azure target: provision managed Azure services directly + wire passwordless access. Local (kind) leaves this false and uses the container recipes.')
-param isAzure bool = false
-
-@description('Discord webhook URL. On Azure it seeds the Key Vault secret; locally the notifier-webhook k8s Secret is used instead.')
-@secure()
-param discordWebhookUrl string = ''
-
-@description('Azure region for managed resources (Azure target only).')
-param azLocation string = 'australiaeast'
-
 // The Radius application. Containers (added next) will reference app.id.
 resource app 'Applications.Core/applications@2023-10-01-preview' = {
   name: 'stepup'
@@ -55,18 +45,6 @@ resource postgres 'Applications.Core/extenders@2023-10-01-preview' = {
   properties: {
     environment: environment
     application: app.id
-  }
-}
-
-// Azure Key Vault holding the Discord webhook (and later the drasi password),
-// read passwordlessly by the notifier's daprd via Workload Identity. Azure-only.
-// Azure-only managed resources live in a conditional module so app.bicep's
-// top-level template carries no Microsoft.* Azure types (see infra/azure.bicep).
-module azure 'azure.bicep' = if (isAzure) {
-  name: 'stepup-azure'
-  params: {
-    discordWebhookUrl: discordWebhookUrl
-    azLocation: azLocation
   }
 }
 
@@ -154,41 +132,30 @@ resource discord 'dapr.io/Component@v1alpha1' = {
   spec: {
     type: 'bindings.http'
     version: 'v1'
-    metadata: isAzure ? [
-      { name: 'url', secretKeyRef: { name: 'discord-webhook' } }
-    ] : [
-      { name: 'url', secretKeyRef: { name: 'notifier-webhook', key: 'url' } }
+    metadata: [
+      {
+        name: 'url'
+        secretKeyRef: {
+          name: 'notifier-webhook'
+          key: 'url'
+        }
+      }
     ]
   }
   auth: {
     secretStore: 'stepup-secrets'
   }
   scopes: [ 'notifier' ]
+  dependsOn: [ secrets ]
 }
 
 // Local: portable Dapr secret store recipe (secretstores.kubernetes → notifier-webhook k8s Secret).
-resource secrets 'Applications.Dapr/secretStores@2023-10-01-preview' = if (!isAzure) {
+resource secrets 'Applications.Dapr/secretStores@2023-10-01-preview' = {
   name: 'stepup-secrets'
   properties: {
     environment: environment
     application: app.id
   }
-}
-
-// Azure: Dapr Key Vault secret store, read via the notifier pod's Workload Identity.
-resource secretsAzure 'dapr.io/Component@v1alpha1' = if (isAzure) {
-  metadata: {
-    name: 'stepup-secrets'
-    namespace: 'default-stepup'
-  }
-  spec: {
-    type: 'secretstores.azure.keyvault'
-    version: 'v1'
-    metadata: [
-      { name: 'vaultName', value: azure.outputs.keyVaultName }
-    ]
-  }
-  scopes: [ 'notifier' ]
 }
 
 // The Drasi PostDaprPubSub reaction publishes to the SAME broker + topic the
@@ -231,15 +198,6 @@ resource notifier 'Applications.Core/containers@2023-10-01-preview' = {
         appPort: 8080
       }
     ]
-    connections: isAzure ? {
-      vault: {
-        source: azure.outputs.keyVaultId
-        iam: {
-          kind: 'azure'
-          roles: [ 'Key Vault Secrets User' ]
-        }
-      }
-    } : {}
   }
 }
 
