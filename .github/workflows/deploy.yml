@@ -39,6 +39,14 @@ jobs:
                          acrName=${{ vars.ACR_NAME }} \
                          aksName=${{ vars.AKS_NAME }}
 
+      - name: Federate the Radius control-plane service accounts to the OIDC identity
+        run: |
+          OIDC=$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerUrl -o tsv | tr -d '\r')
+          az deployment group create -g "${{ vars.IDENTITY_RG }}" -n radius-federation \
+            --template-file infra/radius-federation.bicep \
+            --parameters identityName=${{ vars.IDENTITY_NAME }} \
+                         aksOidcIssuer="$OIDC"
+
   deploy:
     name: Build, push, and deploy to AKS
     needs: infra          # <-- runs only if infra succeeded
@@ -87,9 +95,15 @@ jobs:
         run: |
           drasi env kube
           kubectl get namespace drasi-system >/dev/null 2>&1 || drasi init
-          rad install kubernetes
+          rad install kubernetes --set global.azureWorkloadIdentity.enabled=true
+          # Re-admit the control-plane pods through the AKS workload-identity webhook so
+          # they pick up the projected SA token (harmless once already WI-enabled).
+          kubectl rollout restart deployment -n radius-system
+          kubectl wait --for=condition=Available deployment --all -n radius-system --timeout=300s
           OIDC_ISSUER="$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerUrl -o tsv | tr -d '\r')"
-          AZ_SUB="${{ vars.AZURE_SUBSCRIPTION_ID }}" AZ_RG="$RG" OIDC_ISSUER="$OIDC_ISSUER" bash scripts/radius-recipes.sh
+          AZ_SUB="${{ vars.AZURE_SUBSCRIPTION_ID }}" AZ_RG="$RG" OIDC_ISSUER="$OIDC_ISSUER" \
+          AZURE_CLIENT_ID="${{ vars.AZURE_CLIENT_ID }}" AZURE_TENANT_ID="${{ vars.AZURE_TENANT_ID }}" \
+          bash scripts/radius-recipes.sh
 
       - name: Webhook secret (before deploy — notifier needs it at startup)
         env:

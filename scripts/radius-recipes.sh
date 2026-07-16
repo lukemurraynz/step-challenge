@@ -68,6 +68,8 @@ if [ -n "${AZ_SUB:-}" ] && [ -n "${AZ_RG:-}" ]; then
   rad env update "$ENV" --group "$GROUP" \
     --azure-subscription-id "$AZ_SUB" \
     --azure-resource-group "$AZ_RG"
+  rad credential register azure wi \
+  --client-id "$AZURE_CLIENT_ID" --tenant-id "$AZURE_TENANT_ID"
 fi
 
 # 2. Register the portable-resource Recipes (paths chosen per environment above).
