@@ -12,7 +12,7 @@ set -euo pipefail
 # Env vars for the Azure target (set by aks-up.sh / the Deploy workflow; unset locally):
 #   AZ_SUB        Azure subscription id
 #   AZ_RG         Azure resource group for the provider scope + managed resources
-#   OIDC_ISSUER   AKS OIDC issuer URL (az aks show ... --query oidcIssuerProfile.issuerURL)
+#   OIDC_ISSUER   AKS OIDC issuer URL (az aks show ... --query oidcIssuerProfile.issuerUrl)
 #
 # Recipe sources (all public OCI, pulled anonymously by the in-cluster engine):
 #   RECIPE_PREFIX (default ghcr.io/radius-project/recipes/local-dev) — built-in pack
@@ -57,11 +57,17 @@ rad workspace create kubernetes "$ENV" --group "$GROUP" --environment "$ENV" --f
 #     Runs BEFORE recipe registration so the declarative env deploy can't drop the
 #     recipes registered in step 2. Skipped locally.
 if [ -n "${AZ_SUB:-}" ] && [ -n "${AZ_RG:-}" ]; then
-  [ -n "${OIDC_ISSUER:-}" ] || { echo "OIDC_ISSUER required on Azure (az aks show ... --query oidcIssuerProfile.issuerURL)" >&2; exit 1; }
+  [ -n "${OIDC_ISSUER:-}" ] || { echo "OIDC_ISSUER required on Azure (az aks show ... --query oidcIssuerProfile.issuerUrl)" >&2; exit 1; }
   rad deploy infra/env.bicep --group "$GROUP" \
     --parameters oidcIssuer="$OIDC_ISSUER" \
     --parameters azureSubscriptionId="$AZ_SUB" \
     --parameters azureResourceGroup="$AZ_RG"
+  # The Bicep env deploy doesn't reliably apply providers.azure, so set the Azure
+  # provider scope with the proven CLI — the redis-azure recipe's listKeys() needs
+  # a real subscription in the scope (env.bicep still supplies compute.identity/WI).
+  rad env update "$ENV" --group "$GROUP" \
+    --azure-subscription-id "$AZ_SUB" \
+    --azure-resource-group "$AZ_RG"
 fi
 
 # 2. Register the portable-resource Recipes (paths chosen per environment above).
