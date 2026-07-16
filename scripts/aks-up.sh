@@ -65,7 +65,7 @@ else
 fi
 # Ensure the 'default' env + recipes, and point the Azure provider at stepup-rg.
 echo "Configuring Radius environment + recipes (Azure provider scope)..."
-OIDC_ISSUER="$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerURL -o tsv | tr -d '\r')"
+OIDC_ISSUER="$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerUrl -o tsv | tr -d '\r')"
 AZ_SUB="$(az account show --query id -o tsv | tr -d '\r')" AZ_RG="$RG" OIDC_ISSUER="$OIDC_ISSUER" bash scripts/radius-recipes.sh
 rad workspace show
 

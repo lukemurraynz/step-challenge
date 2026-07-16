@@ -88,7 +88,7 @@ jobs:
           drasi env kube
           kubectl get namespace drasi-system >/dev/null 2>&1 || drasi init
           rad install kubernetes
-          OIDC_ISSUER="$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerURL -o tsv | tr -d '\r')"
+          OIDC_ISSUER="$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerUrl -o tsv | tr -d '\r')"
           AZ_SUB="${{ vars.AZURE_SUBSCRIPTION_ID }}" AZ_RG="$RG" OIDC_ISSUER="$OIDC_ISSUER" bash scripts/radius-recipes.sh
 
       - name: Webhook secret (before deploy — notifier needs it at startup)
