@@ -112,7 +112,8 @@ resource pubsub 'dapr.io/Component@v1alpha1' = {
     version: 'v1'
     metadata: [
       { name: 'redisHost', value: '${cache.properties.host}:${cache.properties.port}' }
-      { name: 'redisPassword', value: '' }
+      { name: 'redisPassword', value: cache.listSecrets().password }
+      { name: 'enableTLS', value: '${cache.properties.tls}' }
     ]
   }
   scopes: [ 'notifier' ]
@@ -145,12 +146,10 @@ resource discord 'dapr.io/Component@v1alpha1' = {
     secretStore: 'stepup-secrets'
   }
   scopes: [ 'notifier' ]
-  dependsOn: [ secrets ] 
+  dependsOn: [ secrets ]
 }
 
-// Portable Dapr secret store. Local recipe = secretstores.kubernetes (reads the
-// notifier-webhook k8s Secret); the Azure recipe swaps it for Key Vault. The
-// recipe names the Dapr component after this resource ('stepup-secrets').
+// Local: portable Dapr secret store recipe (secretstores.kubernetes → notifier-webhook k8s Secret).
 resource secrets 'Applications.Dapr/secretStores@2023-10-01-preview' = {
   name: 'stepup-secrets'
   properties: {
@@ -174,7 +173,8 @@ resource pubsubDrasi 'dapr.io/Component@v1alpha1' = {
     version: 'v1'
     metadata: [
       { name: 'redisHost', value: '${cache.properties.host}:${cache.properties.port}' }
-      { name: 'redisPassword', value: '' }
+      { name: 'redisPassword', value: cache.listSecrets().password }
+      { name: 'enableTLS', value: '${cache.properties.tls}' }
     ]
   }
 }

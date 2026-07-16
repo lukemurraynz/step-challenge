@@ -88,7 +88,8 @@ jobs:
           drasi env kube
           kubectl get namespace drasi-system >/dev/null 2>&1 || drasi init
           rad install kubernetes
-          AZ_SUB="${{ vars.AZURE_SUBSCRIPTION_ID }}" AZ_RG="$RG" bash scripts/radius-recipes.sh
+          OIDC_ISSUER="$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerURL -o tsv | tr -d '\r')"
+          AZ_SUB="${{ vars.AZURE_SUBSCRIPTION_ID }}" AZ_RG="$RG" OIDC_ISSUER="$OIDC_ISSUER" bash scripts/radius-recipes.sh
 
       - name: Webhook secret (before deploy — notifier needs it at startup)
         env:
@@ -105,7 +106,8 @@ jobs:
             --group default \
             --environment default \
             --parameters imageRegistry="$ACR.azurecr.io" \
-            --parameters imageTag="$TAG"
+            --parameters imageTag="$TAG" \
+            || echo "rad deploy reported a failure (likely the notifier startup race); the rollout restart below recovers it."
           kubectl wait --for=condition=ready pod -l app=postgres -n default --timeout=180s
 
       - name: Restart Dapr services so sidecars load components

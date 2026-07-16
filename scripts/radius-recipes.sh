@@ -2,35 +2,45 @@
 set -euo pipefail
 
 # Configure the Radius 'default' environment for StepUp: ensure the group + env
-# exist, register the portable-resource Recipes, and (on Azure) point the Azure
-# provider at the app resource group. Idempotent; safe to re-run on every spin-up.
+# exist, register the portable-resource Recipes, and (on Azure) give the env the
+# Workload Identity + Azure provider scope. Idempotent; safe to re-run.
 #
-# Optional env vars for the Azure provider scope (set on AKS, unset locally):
-#   AZ_SUB  Azure subscription id
-#   AZ_RG   Azure resource group where Azure-native recipes will deploy
+# ONE app.bicep, two targets: locally the recipes provision containers; on Azure
+# (AZ_SUB + AZ_RG set) the env carries Entra Workload Identity so container
+# `connections { iam }` can reach managed services passwordlessly.
 #
-# The Redis + secret-store Recipes come from the public Radius local-dev pack
-# (container-based, work on both kind and AKS). The Postgres extender is our own
-# recipe, published to public GHCR via `rad bicep publish`. Override with:
-#   RECIPE_PREFIX (default ghcr.io/radius-project/recipes/local-dev)
+# Env vars for the Azure target (set by aks-up.sh / the Deploy workflow; unset locally):
+#   AZ_SUB        Azure subscription id
+#   AZ_RG         Azure resource group for the provider scope + managed resources
+#   OIDC_ISSUER   AKS OIDC issuer URL (az aks show ... --query oidcIssuerProfile.issuerURL)
+#
+# Recipe sources (all public OCI, pulled anonymously by the in-cluster engine):
+#   RECIPE_PREFIX (default ghcr.io/radius-project/recipes/local-dev) — built-in pack
+#   OWN_RECIPES   (default ghcr.io/willvelida/stepup-recipes)        — our recipes
 #   RECIPE_TAG    (default latest)
-#   PG_RECIPE     (default ghcr.io/willvelida/stepup-recipes/postgres)
 
 GROUP=default
 ENV=default
 NS=default
 RECIPE_PREFIX="${RECIPE_PREFIX:-ghcr.io/radius-project/recipes/local-dev}"
+OWN_RECIPES="${OWN_RECIPES:-ghcr.io/willvelida/stepup-recipes}"
 RECIPE_TAG="${RECIPE_TAG:-latest}"
-PG_RECIPE="${PG_RECIPE:-ghcr.io/willvelida/stepup-recipes/postgres}"
+
+# Recipe source per portable type. Defaults = local/container recipes; the Azure
+# branch overrides the ones ported to managed services. Both live on public GHCR.
+REDIS_RECIPE="$OWN_RECIPES/redis:$RECIPE_TAG"
+SECRETS_RECIPE="$RECIPE_PREFIX/secretstores:$RECIPE_TAG"
+POSTGRES_RECIPE="$OWN_RECIPES/postgres:$RECIPE_TAG"
+
+if [ -n "${AZ_SUB:-}" ] && [ -n "${AZ_RG:-}" ]; then
+  REDIS_RECIPE="$OWN_RECIPES/redis-azure:$RECIPE_TAG"    # Azure Cache for Redis
+  # SECRETS_RECIPE + POSTGRES_RECIPE go Azure in later PR6 chunks.
+fi
 
 # 0. Pin a BARE CLI workspace (UCP plane + connection to the current cluster).
 #    Do NOT pass --group/--environment here: rad validates they already exist and
-#    fails ("resource group default does not exist. Run rad env create") on a
-#    cluster where they don't yet — which is the case when `rad install kubernetes`
-#    skips ("already installed") without creating them. The group + env are created
-#    in step 1; the flags go on the re-pin in 1b once they exist. On a bare CI
-#    runner this workspace also replaces the scope-less fallback that made rad build
-#    invalid UCP URLs for `rad recipe register`.
+#    fails on a cluster where they don't yet. The group + env are created in step
+#    1; the flags go on the re-pin in 1b once they exist.
 rad workspace create kubernetes "$ENV" --force
 
 # 1. Ensure the Radius resource group + environment exist (idempotent).
@@ -42,36 +52,36 @@ rad env show "$ENV" --group "$GROUP" >/dev/null 2>&1 \
 #     bare `rad deploy` (cluster-up.sh / aks-up.sh) resolves them without flags.
 rad workspace create kubernetes "$ENV" --group "$GROUP" --environment "$ENV" --force
 
-# 2. Register the portable-resource Recipes (Redis, secret store, Postgres).
-#    Re-running overwrites the recipe, so this is safe on every spin-up.
+# 1c. On Azure, layer Workload Identity (compute.identity) + the Azure provider
+#     scope onto the env via Bicep — there is no CLI flag for compute.identity.
+#     Runs BEFORE recipe registration so the declarative env deploy can't drop the
+#     recipes registered in step 2. Skipped locally.
+if [ -n "${AZ_SUB:-}" ] && [ -n "${AZ_RG:-}" ]; then
+  [ -n "${OIDC_ISSUER:-}" ] || { echo "OIDC_ISSUER required on Azure (az aks show ... --query oidcIssuerProfile.issuerURL)" >&2; exit 1; }
+  rad deploy infra/env.bicep --group "$GROUP" \
+    --parameters oidcIssuer="$OIDC_ISSUER" \
+    --parameters azureSubscriptionId="$AZ_SUB" \
+    --parameters azureResourceGroup="$AZ_RG"
+fi
+
+# 2. Register the portable-resource Recipes (paths chosen per environment above).
 rad recipe register default \
   --environment "$ENV" --group "$GROUP" \
   --resource-type Applications.Datastores/redisCaches \
   --template-kind bicep \
-  --template-path "$RECIPE_PREFIX/rediscaches:$RECIPE_TAG"
+  --template-path "$REDIS_RECIPE"
 
 rad recipe register default \
   --environment "$ENV" --group "$GROUP" \
   --resource-type Applications.Dapr/secretStores \
   --template-kind bicep \
-  --template-path "$RECIPE_PREFIX/secretstores:$RECIPE_TAG"
+  --template-path "$SECRETS_RECIPE"
 
-# StepUp's own Postgres recipe (Applications.Core/extenders): logical-replication
-# Postgres + init SQL + drasi role, pinned to Service `postgres` in namespace
-# `default` so the Drasi source host stays postgres.default.svc.cluster.local.
 rad recipe register default \
   --environment "$ENV" --group "$GROUP" \
   --resource-type Applications.Core/extenders \
   --template-kind bicep \
-  --template-path "$PG_RECIPE:$RECIPE_TAG"
-
-# 3. On Azure, give the environment a provider scope so Azure-native recipes
-#    (later PRs) have somewhere to deploy. Skipped locally.
-if [ -n "${AZ_SUB:-}" ] && [ -n "${AZ_RG:-}" ]; then
-  rad env update "$ENV" --group "$GROUP" \
-    --azure-subscription-id "$AZ_SUB" \
-    --azure-resource-group "$AZ_RG"
-fi
+  --template-path "$POSTGRES_RECIPE"
 
 echo "Radius environment '$ENV' configured. Recipes:"
 rad recipe list --environment "$ENV" --group "$GROUP"
