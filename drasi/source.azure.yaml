@@ -1,0 +1,25 @@
+# Azure variant of drasi/source.yaml: connects the Drasi PostgreSQL source to the
+# managed Flexible Server. The FQDN is injected by the deploy workflow (envsubst
+# ${PG_HOST}); the drasi role password comes from the `drasi-pg` k8s Secret the
+# workflow creates from the DRASI_PASSWORD gh secret — so no credential is committed.
+# Flexible Server uses a plain username (no user@server) and requires TLS.
+apiVersion: v1
+kind: Source
+name: stepup
+spec:
+  kind: PostgreSQL
+  properties:
+    host: ${PG_HOST}
+    port: 5432
+    user: drasi
+    password:
+      kind: Secret
+      name: drasi-pg
+      key: password
+    database: stepup
+    ssl: true
+    tables:
+      - public.participants
+      - public.step_logs
+      - public.daily_targets
+      - public.challenge_state

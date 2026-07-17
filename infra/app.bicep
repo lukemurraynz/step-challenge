@@ -67,7 +67,7 @@ resource simulator 'Applications.Core/containers@2023-10-01-preview' = {
       }
       env: {
         PG_DSN: {
-          value: 'Host=${postgres.properties.host};Port=${postgres.properties.port};Username=postgres;Password=postgres;Database=${postgres.properties.database}'
+          value: postgres.listSecrets().connectionString
         }
       }
     }
@@ -214,7 +214,7 @@ resource clock 'Applications.Core/containers@2023-10-01-preview' = {
       imagePullPolicy: 'IfNotPresent'
       env: {
         PG_DSN: {
-          value: 'Host=${postgres.properties.host};Port=${postgres.properties.port};Username=postgres;Password=postgres;Database=${postgres.properties.database}'
+          value: postgres.listSecrets().connectionString
         }
       }
     }

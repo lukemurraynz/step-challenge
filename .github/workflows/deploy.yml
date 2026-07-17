@@ -113,6 +113,7 @@ jobs:
           OIDC_ISSUER="$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerUrl -o tsv | tr -d '\r')"
           AZ_SUB="${{ vars.AZURE_SUBSCRIPTION_ID }}" AZ_RG="$RG" OIDC_ISSUER="$OIDC_ISSUER" \
           AZURE_CLIENT_ID="${{ vars.AZURE_CLIENT_ID }}" AZURE_TENANT_ID="${{ vars.AZURE_TENANT_ID }}" \
+          POSTGRES_ADMIN_PASSWORD="${{ secrets.POSTGRES_ADMIN_PASSWORD }}" \
           bash scripts/radius-recipes.sh
 
       - name: Webhook secret (before deploy — notifier needs it at startup)
@@ -132,8 +133,23 @@ jobs:
             --parameters imageRegistry="$ACR.azurecr.io" \
             --parameters imageTag="$TAG" \
             || echo "rad deploy reported a failure (likely the notifier startup race); the rollout restart below recovers it."
-          kubectl wait --for=condition=ready pod -l app=postgres -n default --timeout=180s
 
+      - name: Initialize the Flexible Server DB (schema + seed + Drasi role)
+        run: |
+          PG_HOST=$(az postgres flexible-server list -g "$RG" \
+            --query "[?starts_with(name,'stepup-')].fullyQualifiedDomainName | [0]" -o tsv | tr -d '\r')
+          echo "Flexible Server: $PG_HOST"
+          kubectl -n default create secret generic postgres-init \
+            --from-literal=host="$PG_HOST" \
+            --from-literal=adminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD }}" \
+            --from-literal=drasiPassword="${{ secrets.DRASI_PASSWORD }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n default create configmap postgres-init-sql \
+            --from-file=data/schema.sql --from-file=data/seed.sql --from-file=data/drasi-flex.sql \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n default delete job postgres-init --ignore-not-found
+          kubectl -n default apply -f k8s/postgres-init.yaml
+          kubectl -n default wait --for=condition=complete job/postgres-init --timeout=600s
       - name: Restart Dapr services so sidecars load components
         run: |
           for d in simulator clock notifier; do kubectl rollout restart "deploy/$d" -n default-stepup; done
@@ -141,8 +157,17 @@ jobs:
 
       - name: Apply Drasi source → queries → reactions
         run: |
-          drasi apply -f drasi/source.yaml
-          drasi wait  -f drasi/source.yaml -t 180
+          PG_HOST=$(az postgres flexible-server list -g "$RG" \
+            --query "[?starts_with(name,'stepup-')].fullyQualifiedDomainName | [0]" -o tsv | tr -d '\r')
+          # Drasi reads the drasi role password from a k8s Secret (no plaintext in the manifest).
+          kubectl -n drasi-system create secret generic drasi-pg \
+            --from-literal=password="${{ secrets.DRASI_PASSWORD }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          # Inject only the dynamic Flexible Server FQDN; everything else is committed.
+          export PG_HOST
+          envsubst '${PG_HOST}' < drasi/source.azure.yaml > /tmp/source.azure.yaml
+          drasi apply -f /tmp/source.azure.yaml
+          drasi wait  -f /tmp/source.azure.yaml -t 180
           # bounce the cold-start view-svc, then gate on the query container being truly online
           view=$(kubectl get pods -n drasi-system -o name | grep view-svc || true)
           [ -n "$view" ] && kubectl delete -n drasi-system "$view"
