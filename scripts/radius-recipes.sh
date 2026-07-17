@@ -26,15 +26,16 @@ RECIPE_PREFIX="${RECIPE_PREFIX:-ghcr.io/radius-project/recipes/local-dev}"
 OWN_RECIPES="${OWN_RECIPES:-ghcr.io/willvelida/stepup-recipes}"
 RECIPE_TAG="${RECIPE_TAG:-latest}"
 
-# Recipe source per portable type. Defaults = local/container recipes; the Azure
-# branch overrides the ones ported to managed services. Both live on public GHCR.
 REDIS_RECIPE="$OWN_RECIPES/redis:$RECIPE_TAG"
 SECRETS_RECIPE="$RECIPE_PREFIX/secretstores:$RECIPE_TAG"
 POSTGRES_RECIPE="$OWN_RECIPES/postgres:$RECIPE_TAG"
+POSTGRES_RECIPE_PARAMS=()   # extra --parameters for the postgres recipe (Azure only)
 
 if [ -n "${AZ_SUB:-}" ] && [ -n "${AZ_RG:-}" ]; then
-  REDIS_RECIPE="$OWN_RECIPES/redis-azure:$RECIPE_TAG"    # Azure Cache for Redis
-  # SECRETS_RECIPE + POSTGRES_RECIPE go Azure in later PR6 chunks.
+  REDIS_RECIPE="$OWN_RECIPES/redis-azure:$RECIPE_TAG"         # Azure Cache for Redis
+  POSTGRES_RECIPE="$OWN_RECIPES/postgres-azure:$RECIPE_TAG"   # Azure PostgreSQL Flexible Server
+  POSTGRES_RECIPE_PARAMS=(--parameters "administratorLoginPassword=${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD required on Azure}")
+  # SECRETS_RECIPE goes Azure in a later chunk.
 fi
 
 # 0. Pin a BARE CLI workspace (UCP plane + connection to the current cluster).
@@ -89,7 +90,8 @@ rad recipe register default \
   --environment "$ENV" --group "$GROUP" \
   --resource-type Applications.Core/extenders \
   --template-kind bicep \
-  --template-path "$POSTGRES_RECIPE"
+  --template-path "$POSTGRES_RECIPE" \
+  "${POSTGRES_RECIPE_PARAMS[@]}"
 
 echo "Radius environment '$ENV' configured. Recipes:"
 rad recipe list --environment "$ENV" --group "$GROUP"

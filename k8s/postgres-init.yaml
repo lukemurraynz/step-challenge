@@ -1,0 +1,48 @@
+# One-shot DB init for the Azure Flexible Server (which has no /docker-entrypoint-initdb.d):
+# applies schema -> seed -> drasi-flex as the admin. Idempotent (IF NOT EXISTS / ON CONFLICT
+# / guarded roles), so it's safe to re-run every deploy. The workflow (piece 5) creates the
+# `postgres-init-sql` ConfigMap (from data/*.sql) and the `postgres-init` Secret, then applies
+# this Job and waits for completion.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-init
+  namespace: default
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: postgres-init }
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: postgres:16
+          command: [ "/bin/bash", "-c" ]
+          args:
+            - |
+              set -euo pipefail
+              export PGPASSWORD="$PG_ADMIN_PASSWORD"
+              export PGSSLMODE=require   # Flexible Server enforces TLS
+              # The server restarts when wal_level flips to logical — wait it out.
+              until psql -h "$PG_HOST" -U stepupadmin -d stepup -c 'SELECT 1' >/dev/null 2>&1; do
+                echo "waiting for $PG_HOST to accept connections..."; sleep 10
+              done
+              PSQL="psql -h $PG_HOST -U stepupadmin -d stepup -v ON_ERROR_STOP=1"
+              $PSQL -f /sql/schema.sql
+              $PSQL -f /sql/seed.sql
+              $PSQL -v drasi_password="$DRASI_PASSWORD" -f /sql/drasi-flex.sql
+              echo "postgres-init complete."
+          env:
+            - name: PG_HOST
+              valueFrom: { secretKeyRef: { name: postgres-init, key: host } }
+            - name: PG_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-init, key: adminPassword } }
+            - name: DRASI_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-init, key: drasiPassword } }
+          volumeMounts:
+            - { name: sql, mountPath: /sql }
+      volumes:
+        - name: sql
+          configMap: { name: postgres-init-sql }
