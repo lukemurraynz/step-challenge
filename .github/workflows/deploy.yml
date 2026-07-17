@@ -161,7 +161,7 @@ jobs:
             --query "[?starts_with(name,'stepup-')].fullyQualifiedDomainName | [0]" -o tsv | tr -d '\r')
           # Drasi reads the drasi role password from a k8s Secret (no plaintext in the manifest).
           kubectl -n drasi-system create secret generic drasi-pg \
-            --from-literal=password="${{ secrets.DRASI_PASSWORD }}" \
+            --from-literal=password="${{ secrets.POSTGRES_ADMIN_PASSWORD }}" \
             --dry-run=client -o yaml | kubectl apply -f -
           # Inject only the dynamic Flexible Server FQDN; everything else is committed.
           export PG_HOST
