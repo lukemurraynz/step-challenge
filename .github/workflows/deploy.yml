@@ -96,10 +96,20 @@ jobs:
           drasi env kube
           kubectl get namespace drasi-system >/dev/null 2>&1 || drasi init
           rad install kubernetes --set global.azureWorkloadIdentity.enabled=true
-          # Re-admit the control-plane pods through the AKS workload-identity webhook so
-          # they pick up the projected SA token (harmless once already WI-enabled).
-          kubectl rollout restart deployment -n radius-system
-          kubectl wait --for=condition=Available deployment --all -n radius-system --timeout=300s
+          # rad install + rad credential register do NOT annotate the radius-system
+          # service accounts for Workload Identity (only `rad init --full` does), so the
+          # WI webhook never injects a token into bicep-de and Azure recipe deploys fail
+          # with "'' is not valid subscription identifier" (radius-project/radius#12278).
+          # Annotate the SAs + label the deployments so the webhook projects the token.
+          for sa in applications-rp bicep-de ucp dynamic-rp; do
+            kubectl -n radius-system get deployment "$sa" >/dev/null 2>&1 || continue
+            kubectl -n radius-system annotate sa "$sa" --overwrite \
+              azure.workload.identity/client-id="${{ vars.AZURE_CLIENT_ID }}" \
+              azure.workload.identity/tenant-id="${{ vars.AZURE_TENANT_ID }}"
+            kubectl -n radius-system patch deployment "$sa" --type merge \
+              -p '{"spec":{"template":{"metadata":{"labels":{"azure.workload.identity/use":"true"}}}}}'
+            kubectl -n radius-system rollout status deployment/"$sa" --timeout=300s
+          done
           OIDC_ISSUER="$(az aks show -g "$RG" -n "$AKS" --query oidcIssuerProfile.issuerUrl -o tsv | tr -d '\r')"
           AZ_SUB="${{ vars.AZURE_SUBSCRIPTION_ID }}" AZ_RG="$RG" OIDC_ISSUER="$OIDC_ISSUER" \
           AZURE_CLIENT_ID="${{ vars.AZURE_CLIENT_ID }}" AZURE_TENANT_ID="${{ vars.AZURE_TENANT_ID }}" \
