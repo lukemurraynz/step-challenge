@@ -134,6 +134,12 @@ jobs:
             --parameters imageTag="$TAG" \
             || echo "rad deploy reported a failure (likely the notifier startup race); the rollout restart below recovers it."
 
+      - name: Restart Flexible Server so wal_level=logical takes effect
+        run: |
+          SERVER=$(az postgres flexible-server list -g "$RG" \
+            --query "[?starts_with(name,'stepup-')].name | [0]" -o tsv | tr -d '\r')
+          az postgres flexible-server restart -g "$RG" -n "$SERVER"
+          
       - name: Initialize the Flexible Server DB (schema + seed + Drasi role)
         run: |
           PG_HOST=$(az postgres flexible-server list -g "$RG" \
